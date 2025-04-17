@@ -1,29 +1,37 @@
 const venom = require('venom-bot');
-require('dotenv').config();
-const mongoose = require('mongoose');
 const handleOnboarding = require('./flows/onboarding');
 
-
-// DB Models
+require('dotenv').config();
+const mongoose = require('mongoose');
 const User = require('./db/user-data');
 const Audit = require('./db/user-audit');
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGO_URL, {
+const sessions = {}; // Shared session store
+const mongoUrl = process.env.MONGO_URL;
+
+if (!mongoUrl) {
+  console.error("❌ MONGO_URL is missing in .env file!");
+  process.exit(1);
+}
+
+console.log("🔍 Connecting to MongoDB:", mongoUrl);
+
+mongoose.connect(mongoUrl, {
   useNewUrlParser: true,
-  useUnifiedTopology: true
+  useUnifiedTopology: true,
+  dbName: 'dpworks-db',
 }).then(() => {
   console.log('✅ MongoDB connected');
 }).catch((err) => {
-  console.error('❌ MongoDB connection error:', err);
+  console.error('❌ MongoDB connection error:', err.message);
+  process.exit(1);
 });
 
-// Start Venom
 venom
   .create({
     session: 'dpworks-session',
     multidevice: true,
-    headless: true,
+    headless: false,
     browserArgs: ['--no-sandbox']
   })
   .then((client) => {
@@ -32,18 +40,38 @@ venom
   })
   .catch((err) => console.error('❌ Venom error:', err));
 
-// Main Bot Logic
 function startBot(client) {
   client.onMessage(async (msg) => {
     if (!msg.from || !msg.body) return;
-
-    // Ignore groups
     if (msg.isGroupMsg) return;
+    if (!msg.from.endsWith('@c.us')) return;
 
     console.log(`📩 Message from ${msg.from}: ${msg.body}`);
+    const input = msg.body.trim().toLowerCase();
 
-    // Onboarding logic (we plug in next)
-    await handleOnboarding(msg, client);
+    if (input === 'reset') {
+      delete sessions[msg.from];
+      await client.sendText(msg.from, '🔄 Onboarding reset. Type "Hi" to start again.');
+      return;
+    }
 
+    if (input === 'my info') {
+      const user = await User.findOne({ phone: msg.from });
+      if (!user) {
+        await client.sendText(msg.from, '😕 You are not registered yet. Please type "Hi" to begin onboarding.');
+        return;
+      }
+
+      const msgText = `🧾 Your profile:\n\n👤 Name: ${user.name || 'N/A'}\n📍 PIN: ${user.pin || 'N/A'}\n🏡 Village: ${user.village || ''} (${user.villageOdia || ''})\n🎂 DOB: ${user.birthday || 'N/A'}\n🔮 Zodiac: ${user.zodiac || 'N/A'}\n🎖️ Role: ${user.role || 'N/A'}\n🧑 Gender: ${user.gender || 'N/A'}`;
+      await client.sendText(msg.from, msgText);
+      return;
+    }
+
+    try {
+      await handleOnboarding(msg, client, sessions);
+    } catch (err) {
+      console.error('💥 Error in onboarding flow:', err.message);
+      await client.sendText(msg.from, '⚠️ Something went wrong. Please type "Hi" to try again.');
+    }
   });
 }
