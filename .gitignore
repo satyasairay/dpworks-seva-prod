@@ -4,3 +4,5 @@ venom-token*
 logs/
 .DS_Store
 npm-debug.log*
+"tokens/" 
+"bot/TEST*" 
